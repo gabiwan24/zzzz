@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interaktives ZZZZ Logo 21.1 (Zentrierte Positionierung)</title>
+    <!-- Tailwind CSS für das Styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Roboto', sans-serif;
+            overflow: hidden; /* Verhindert Scrollbalken */
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #record-btn {
+            touch-action: manipulation;
+        }
+        #analysis-modal {
+            transition: opacity 0.3s ease;
+        }
+    </style>
+</head>
+<body class="bg-white text-black m-0 p-0">
+
+    <div id="canvas-container" class="w-screen h-screen absolute top-0 left-0">
+        <canvas id="logoCanvas"></canvas>
+    </div>
+
+    <!-- Steuerelemente im Vordergrund -->
+    <div class="absolute bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-4 p-4 bg-white/80 backdrop-blur-sm rounded-lg shadow-lg">
+        <button id="record-btn" class="px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-opacity-75 transition-all duration-200 disabled:bg-gray-400 select-none text-center whitespace-nowrap w-48 text-sm">
+            Push to sleep
+        </button>
+        <button id="reset-btn" class="px-6 py-3 bg-gray-200 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-opacity-75 transition-all duration-200 select-none">
+            Reset
+        </button>
+        <button id="show-analysis-btn" class="px-6 py-3 bg-purple-600 text-white font-semibold rounded-lg shadow-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-400 focus:ring-opacity-75 transition-all duration-200 select-none disabled:bg-gray-400 disabled:cursor-not-allowed">
+            Analytics
+        </button>
+        <div id="live-level-container" class="w-24 h-6 bg-gray-200 rounded-lg overflow-hidden hidden">
+            <div id="live-level-bar" class="h-full bg-green-500 transition-all duration-75" style="width: 0%;"></div>
+        </div>
+    </div>
+    
+    <div id="info-box" class="absolute top-5 right-5 text-gray-500 text-sm p-3 bg-white/80 backdrop-blur-sm rounded-lg shadow-lg hidden">
+        Bitte Mikrofonzugriff erlauben...
+    </div>
+
+    <div id="debug-display" class="absolute top-5 left-5 text-gray-700 text-sm p-3 bg-white/80 backdrop-blur-sm rounded-lg shadow-lg hidden w-56">
+        <h3 class="font-bold border-b pb-1 mb-2">Analyse-Ergebnis</h3>
+        <div id="debug-content"></div>
+    </div>
+    
+    <div id="analysis-modal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center hidden opacity-0 z-50">
+        <div class="bg-white p-6 rounded-lg shadow-2xl w-11/12 max-w-4xl relative">
+            <button id="close-analysis-btn" class="absolute top-2 right-2 text-2xl text-gray-500 hover:text-black">&times;</button>
+            <h2 class="text-xl font-bold mb-4">Aufnahme-Analyse</h2>
+            <canvas id="analysisCanvas" width="800" height="300"></canvas>
+        </div>
+    </div>
+
+
+    <script>
+        const canvas = document.getElementById('logoCanvas');
+        const ctx = canvas.getContext('2d');
+        const recordBtn = document.getElementById('record-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        const infoBox = document.getElementById('info-box');
+        const debugDisplay = document.getElementById('debug-display');
+        const debugContent = document.getElementById('debug-content');
+        const liveLevelContainer = document.getElementById('live-level-container');
+        const liveLevelBar = document.getElementById('live-level-bar');
+        const showAnalysisBtn = document.getElementById('show-analysis-btn');
+        const analysisModal = document.getElementById('analysis-modal');
+        const closeAnalysisBtn = document.getElementById('close-analysis-btn');
+        const analysisCanvas = document.getElementById('analysisCanvas');
+        const analysisCtx = analysisCanvas.getContext('2d');
+
+        let mediaRecorder, animationFrameId, audioStream;
+        let recordingTimeout;
+        let recordedChunks = [];
+        let appState = 'idle';
+        let liveAudioContext, liveAnalyser, liveLevelAnimationId;
+        let lastAnalysisData = null;
+        
+        const pathData = {
+            thin: "M0.97998 95.29L63.27 6.17999H1.95996V0.0499878H71.84V6.24998L8.77997 95.36H74.34V101.49H0.969971V95.29H0.97998Z",
+            thick: "M0.920044 83.79L43 21.5H1.82004V0.039978H81.6L81.74 19.97L39.5201 80.17H83.2101V101.49H0.920044V83.79Z",
+            longBottom: "M49.23 95.45L111.52 6.34003H0.209961V0.210022H120.09V6.40997L57.03 95.53H426.59V101.66H49.22V95.46L49.23 95.45Z",
+            longTop: "M294.76 95.67L357.05 6.56H0.670044V0.429993H365.62V6.63L302.56 95.75H418.12V101.88H294.75V95.6801L294.76 95.67Z"
+        };
+        
+        function parseSVGPath(d) {
+            const commands = d.replace(/([a-zA-Z])/g, ' $1 ').trim().split(/\s+/);
+            let points = []; let currentX = 0; let currentY = 0; let startX = 0; let startY = 0;
+            for (let i = 0; i < commands.length; ) {
+                const cmd = commands[i++];
+                const parse = () => parseFloat(commands[i++]);
+                switch(cmd) {
+                    case 'M': currentX = parse(); currentY = parse(); startX = currentX; startY = currentY; points.push({x: currentX, y: currentY}); break;
+                    case 'L': currentX = parse(); currentY = parse(); points.push({x: currentX, y: currentY}); break;
+                    case 'H': currentX = parse(); points.push({x: currentX, y: currentY}); break;
+                    case 'V': currentY = parse(); points.push({x: currentX, y: currentY}); break;
+                    case 'Z': case 'z': points.push({x: startX, y: startY}); break;
+                }
+            }
+            return points.slice(0, 10);
+        }
+
+        const pointData = {
+            thin: parseSVGPath(pathData.thin),
+            thick: parseSVGPath(pathData.thick),
+            longBottom: parseSVGPath(pathData.longBottom),
+            longTop: parseSVGPath(pathData.longTop)
+        };
+        
+        const NUM_LETTERS = 4;
+        const letters = Array(NUM_LETTERS).fill(null).map(() => ({
+            alpha: 1, targetAlpha: 1, rotation: 0, targetRotation: 0, scale: 1, targetScale: 1,
+            offsetY: 0, targetOffsetY: 0, spacingAfter: 80, targetSpacingAfter: 80,
+            currentPoints: JSON.parse(JSON.stringify(pointData.thin)),
+            targetPoints: JSON.parse(JSON.stringify(pointData.thin))
+        }));
+        
+        function lerp(start, end, amount) { return start * (1 - amount) + end * amount; }
+        function interpolateShapes(shapeA, shapeB, t) { return shapeA.map((p, i) => ({ x: lerp(p.x, shapeB[i].x, t), y: lerp(p.y, shapeB[i].y, t) })); }
+
+        function resizeCanvas() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; draw(); }
+        window.addEventListener('resize', resizeCanvas);
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const shapeDisplayHeight = 100;
+            let shapeWidths = letters.map(l => { const bbox = calculateBoundingBox(l.currentPoints); return (bbox.width / bbox.height) * shapeDisplayHeight; });
+            letters.forEach(l => l.spacingAfter = lerp(l.spacingAfter, l.targetSpacingAfter, 0.08));
+            const totalWidthOfAllLetters = shapeWidths.reduce((sum, w) => sum + w, 0) + letters.slice(0, -1).reduce((sum, l) => sum + l.spacingAfter, 0);
+            
+            // --- NEU: Positionierung im zentralen Feld ---
+            const drawingAreaWidth = canvas.width * 0.6;
+            const drawingAreaStartX = canvas.width * 0.2;
+            let startX = drawingAreaStartX + (drawingAreaWidth - totalWidthOfAllLetters) / 2;
+            // --- Ende der Änderung ---
+            
+            let isAnimating = false;
+
+            letters.forEach((letter, i) => {
+                ctx.save();
+                letter.alpha = lerp(letter.alpha, letter.targetAlpha, 0.08); letter.rotation = lerp(letter.rotation, letter.targetRotation, 0.08); letter.scale = lerp(letter.scale, letter.targetScale, 0.08); letter.offsetY = lerp(letter.offsetY, letter.targetOffsetY, 0.08);
+                
+                let pointsChanged = false;
+                letter.currentPoints.forEach((p, j) => {
+                    const targetP = letter.targetPoints[j];
+                    if (Math.abs(p.x - targetP.x) > 0.1 || Math.abs(p.y - targetP.y) > 0.1) pointsChanged = true;
+                    p.x = lerp(p.x, targetP.x, 0.08); p.y = lerp(p.y, targetP.y, 0.08);
+                });
+
+                if (pointsChanged || Math.abs(letter.alpha - letter.targetAlpha) > 0.01 || Math.abs(letter.rotation - letter.targetRotation) > 0.01 || Math.abs(letter.scale - letter.targetScale) > 0.01 || Math.abs(letter.offsetY - letter.targetOffsetY) > 0.01 || Math.abs(letter.spacingAfter - letter.targetSpacingAfter) > 0.01) isAnimating = true;
+                
+                ctx.fillStyle = `rgba(0, 0, 0, ${letter.alpha})`;
+                
+                const currentShapeWidth = shapeWidths[i];
+                const currentCenterX = startX + (currentShapeWidth / 2);
+                const currentCenterY = canvas.height / 2;
+                
+                ctx.translate(currentCenterX, currentCenterY + letter.offsetY);
+                ctx.rotate(letter.rotation);
+                
+                const currentBbox = calculateBoundingBox(letter.currentPoints);
+                const scale = (shapeDisplayHeight / currentBbox.height) * letter.scale;
+                
+                ctx.scale(scale, scale);
+                ctx.translate(-currentBbox.centerX, -currentBbox.centerY);
+
+                ctx.beginPath();
+                letter.currentPoints.forEach((p, j) => { if(j === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+
+                startX += currentShapeWidth + letter.spacingAfter;
+            });
+            
+            if (isAnimating) { animationFrameId = requestAnimationFrame(draw); } 
+            else if (appState === 'displaying') { appState = 'idle'; recordBtn.disabled = false; }
+        }
+        
+        function calculateBoundingBox(points) { const x = points.map(p => p.x); const y = points.map(p => p.y); const minX = Math.min(...x); const minY = Math.min(...y); const maxX = Math.max(...x); const maxY = Math.max(...y); return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY, centerX: minX + (maxX - minX) / 2, centerY: minY + (maxY - minY) / 2 }; }
+        async function analyzeRecording(audioBlob) {
+            appState = 'analyzing'; recordBtn.textContent = 'Analysiere...'; recordBtn.disabled = true; debugDisplay.classList.add('hidden');
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const arrayBuffer = await audioBlob.arrayBuffer();
+            let audioBuffer;
+            try { audioBuffer = await audioContext.decodeAudioData(arrayBuffer); } catch (e) { return { error: 'Audio konnte nicht verarbeitet werden.' }; }
+            const totalDuration = audioBuffer.duration;
+            const pcmData = audioBuffer.getChannelData(0); 
+
+            let maxAmplitude = 0;
+            for (let i = 0; i < pcmData.length; i++) { if (Math.abs(pcmData[i]) > maxAmplitude) { maxAmplitude = Math.abs(pcmData[i]); } }
+            if (maxAmplitude > 0) { const gain = 0.8 / maxAmplitude; for (let i = 0; i < pcmData.length; i++) { pcmData[i] *= gain; } }
+
+            const sampleRate = audioBuffer.sampleRate; const rmsBlockSize = Math.floor(sampleRate * 0.01);
+            const rmsEnvelope = [];
+            for (let i = 0; i < pcmData.length; i += rmsBlockSize) { const block = pcmData.slice(i, i + rmsBlockSize); const sumSquares = block.reduce((sum, sample) => sum + sample * sample, 0); rmsEnvelope.push(Math.sqrt(sumSquares / block.length)); }
+            if (rmsEnvelope.length === 0) return { error: "Aufnahme zu kurz." };
+            const sortedRms = [...rmsEnvelope].sort((a, b) => a - b); const medianRms = sortedRms[Math.floor(sortedRms.length / 2)]; const dynamicThreshold = Math.max(medianRms * 2.5, 0.005); 
+            let soundEvents = []; let currentEvent = null; const minSilenceBlocks = 5; const minSoundBlocks = 3; let silenceBlocks = 0;
+            rmsEnvelope.forEach((rms, i) => { if (rms > dynamicThreshold) { silenceBlocks = 0; if (!currentEvent) currentEvent = { startBlock: i, pcmSamples: [] }; } else { if (currentEvent) { silenceBlocks++; if (silenceBlocks >= minSilenceBlocks) { if (currentEvent.endBlock - currentEvent.startBlock >= minSoundBlocks) soundEvents.push(currentEvent); currentEvent = null; } } } if (currentEvent) { currentEvent.endBlock = i; const pcmStartIndex = i * rmsBlockSize; const pcmEndIndex = pcmStartIndex + rmsBlockSize; currentEvent.pcmSamples.push(...pcmData.slice(pcmStartIndex, pcmEndIndex)); } });
+            if (currentEvent && currentEvent.endBlock - currentEvent.startBlock >= minSoundBlocks) soundEvents.push(currentEvent);
+            if (soundEvents.length === 0) return { error: "Kein Geräusch erkannt." };
+            const quadrantAnalyses = [];
+            for (let i = 0; i < NUM_LETTERS; i++) {
+                const quadrantStart = totalDuration * (i / NUM_LETTERS); const quadrantEnd = totalDuration * ((i + 1) / NUM_LETTERS);
+                const eventsInQuadrant = soundEvents.filter(e => { const eventTime = e.startBlock * (rmsBlockSize / sampleRate); return eventTime >= quadrantStart && eventTime < quadrantEnd; });
+                if (eventsInQuadrant.length > 0) {
+                    const avgVolume = eventsInQuadrant.reduce((sum, e) => sum + Math.sqrt(e.pcmSamples.reduce((s, sample) => s + sample * sample, 0) / e.pcmSamples.length), 0) / eventsInQuadrant.length; 
+                    const avgDuration = eventsInQuadrant.reduce((sum, e) => sum + (e.endBlock - e.startBlock) * (rmsBlockSize / sampleRate), 0) / eventsInQuadrant.length; let totalZc = 0; eventsInQuadrant.forEach(e => { let zc = 0; for(let j=1; j<e.pcmSamples.length; j++) { if ((e.pcmSamples[j-1] > 0 && e.pcmSamples[j] <= 0) || (e.pcmSamples[j-1] <= 0 && e.pcmSamples[j] > 0)) zc++; } const duration = (e.endBlock - e.startBlock) * (rmsBlockSize / sampleRate); if (duration > 0) totalZc += (zc / (2*duration)); }); const avgPitch = eventsInQuadrant.length > 0 ? totalZc / eventsInQuadrant.length : 0; 
+                    const peakVolume = Math.max(...eventsInQuadrant.map(e => Math.sqrt(e.pcmSamples.reduce((s, sample) => s + sample * sample, 0) / e.pcmSamples.length)));
+                    quadrantAnalyses.push({ volume: avgVolume, duration: avgDuration, pitch: avgPitch, peak: peakVolume }); 
+                } else { 
+                    quadrantAnalyses.push({ volume: 0, duration: 0, pitch: 800, peak: 0 }); 
+                }
+            }
+            lastAnalysisData = { pcmData, soundEvents, quadrantAnalyses, totalDuration, sampleRate, rmsBlockSize };
+            return { quadrantAnalyses };
+        }
+        
+        function generateVisuals(analysisResult) {
+            if (analysisResult.error) { infoBox.textContent = analysisResult.error; infoBox.classList.remove('hidden'); setTimeout(() => infoBox.classList.add('hidden'), 3000); resetToDefault(); return; }
+            appState = 'displaying'; showAnalysisBtn.disabled = false;
+            const { quadrantAnalyses } = analysisResult;
+            
+            letters.forEach((letter, i) => {
+                const analysis = quadrantAnalyses[i];
+                
+                // Form-Morphing
+                const pitchFactor = Math.max(0, Math.min(1, (analysis.pitch - 200) / 1300));
+                let baseShape = interpolateShapes(pointData.thin, pointData.thick, pitchFactor);
+                
+                let stretchBottom = 0; let stretchTop = 0;
+                const volThreshold = 0.1;
+                if (i < 3 && Math.abs(analysis.volume - quadrantAnalyses[i+1].volume) < volThreshold) {
+                    stretchBottom = 1 - (Math.abs(analysis.volume - quadrantAnalyses[i+1].volume) / volThreshold);
+                }
+                 if (i > 0 && Math.abs(analysis.volume - quadrantAnalyses[i-1].volume) < volThreshold) {
+                    stretchTop = 1 - (Math.abs(analysis.volume - quadrantAnalyses[i-1].volume) / volThreshold);
+                }
+                
+                let tempShape = interpolateShapes(baseShape, pointData.longBottom, stretchBottom);
+                letter.targetPoints = interpolateShapes(tempShape, pointData.longTop, stretchTop);
+                
+                // Globale Transformationen
+                letter.targetScale = 0.5 + Math.pow(analysis.volume, 0.5) * 4;
+                letter.targetAlpha = 1.0; 
+                letter.targetOffsetY = (analysis.pitch / 1000 - 0.5) * -100;
+                letter.targetRotation = (Math.random() - 0.5) * Math.PI * 0.4;
+                if(i < NUM_LETTERS - 1) {
+                    letter.targetSpacingAfter = 40 + analysis.peak * 200;
+                }
+            });
+            
+            debugDisplay.classList.add('hidden');
+            recordBtn.textContent = 'Push to sleep'; draw();
+        }
+        
+        function drawAnalysis() { if (!lastAnalysisData) return; const { pcmData, soundEvents, quadrantAnalyses, totalDuration, sampleRate, rmsBlockSize } = lastAnalysisData; const w = analysisCanvas.width; const h = analysisCanvas.height; const midH = h / 2; analysisCtx.clearRect(0, 0, w, h); for (let i = 1; i < NUM_LETTERS; i++) { const x = w * (i / NUM_LETTERS); analysisCtx.beginPath(); analysisCtx.moveTo(x, 0); analysisCtx.lineTo(x, h); analysisCtx.strokeStyle = "#e5e7eb"; analysisCtx.stroke(); analysisCtx.fillStyle = "#9ca3af"; analysisCtx.font = "12px sans-serif"; analysisCtx.textAlign = "center"; analysisCtx.fillText(`Z${i}`, w * ((i - 1) / NUM_LETTERS) + w / (NUM_LETTERS * 2), 15); } analysisCtx.fillText(`Z${NUM_LETTERS}`, w * ((NUM_LETTERS - 1) / NUM_LETTERS) + w / (NUM_LETTERS * 2), 15); soundEvents.forEach(event => { const x = (event.startBlock * rmsBlockSize / sampleRate / totalDuration) * w; const eventW = (event.endBlock - event.startBlock) * rmsBlockSize / sampleRate / totalDuration * w; analysisCtx.fillStyle = "rgba(167, 139, 250, 0.3)"; analysisCtx.fillRect(x, 0, eventW, h); }); analysisCtx.beginPath(); analysisCtx.moveTo(0, midH); const step = Math.ceil(pcmData.length / w); for (let i = 0; i < pcmData.length; i += step) { const x = (i / pcmData.length) * w; const y = midH - (pcmData[i] * midH); analysisCtx.lineTo(x, y); } analysisCtx.strokeStyle = "#4f46e5"; analysisCtx.lineWidth = 1.5; analysisCtx.stroke(); quadrantAnalyses.forEach((analysis, i) => { const quadrantX = w * (i / NUM_LETTERS); const barY = h - 60; const barHeight = 15; const metrics = [{ label: "V", value: analysis.volume * 50, color: "#ef4444" }, { label: "L", value: analysis.duration * 100, color: "#3b82f6" }, { label: "P", value: (analysis.pitch - 500) / 1000 * 50, color: "#22c55e" }]; metrics.forEach((metric, j) => { const y = barY + j * barHeight; analysisCtx.fillStyle = "#6b7280"; analysisCtx.font = "10px sans-serif"; analysisCtx.textAlign = "left"; analysisCtx.fillText(metric.label, quadrantX + 5, y + 10); analysisCtx.fillStyle = "#e5e7eb"; analysisCtx.fillRect(quadrantX + 20, y, 50, 10); analysisCtx.fillStyle = metric.color; analysisCtx.fillRect(quadrantX + 20, y, Math.min(metric.value, 50), 10); }); }); }
+        function updateLiveLevel() { if (!liveAnalyser) return; const dataArray = new Uint8Array(liveAnalyser.frequencyBinCount); liveAnalyser.getByteTimeDomainData(dataArray); let sumSquares = 0.0; for (const amplitude of dataArray) { const normalized = (amplitude / 128.0) - 1.0; sumSquares += normalized * normalized; } const rms = Math.sqrt(sumSquares / dataArray.length); const level = Math.min(1, rms * 5); liveLevelBar.style.width = `${level * 100}%`; liveLevelAnimationId = requestAnimationFrame(updateLiveLevel); }
+        async function startRecording() { if (appState !== 'idle') return; recordBtn.textContent = 'Verbinde...'; infoBox.classList.remove('hidden'); recordBtn.disabled = true; try { audioStream = await navigator.mediaDevices.getUserMedia({ audio: true }); infoBox.classList.add('hidden'); liveAudioContext = new (window.AudioContext || window.webkitAudioContext)(); liveAnalyser = liveAudioContext.createAnalyser(); const source = liveAudioContext.createMediaStreamSource(audioStream); source.connect(liveAnalyser); liveLevelContainer.classList.remove('hidden'); updateLiveLevel(); appState = 'recording'; recordBtn.disabled = false; recordBtn.textContent = 'Aufnahme...'; recordedChunks = []; const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm']; const supportedMimeType = mimeTypes.find(type => MediaRecorder.isTypeSupported(type)); mediaRecorder = new MediaRecorder(audioStream, { mimeType: supportedMimeType }); mediaRecorder.ondataavailable = e => recordedChunks.push(e.data); mediaRecorder.onstop = async () => { try { if (recordedChunks.length === 0 || recordedChunks[0].size === 0) { resetToDefault(); return; } const audioBlob = new Blob(recordedChunks, { type: supportedMimeType }); const analysis = await analyzeRecording(audioBlob); if (analysis) generateVisuals(analysis); } catch (err) { console.error("Error during analysis:", err); infoBox.textContent = 'Analyse fehlgeschlagen.'; infoBox.classList.remove('hidden'); setTimeout(() => infoBox.classList.add('hidden'), 3000); resetToDefault(); } }; mediaRecorder.start(); recordingTimeout = setTimeout(() => { if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording(); }, 10000); } catch (err) { console.error('Fehler bei der Aufnahme:', err); infoBox.textContent = 'Aufnahme fehlgeschlagen.'; infoBox.classList.remove('hidden'); setTimeout(() => infoBox.classList.add('hidden'), 3000); appState = 'idle'; recordBtn.disabled = false; recordBtn.textContent = 'Push to sleep'; } }
+        function stopRecording() { if (appState !== 'recording' || !mediaRecorder) return; cancelAnimationFrame(liveLevelAnimationId); liveLevelContainer.classList.add('hidden'); liveLevelBar.style.width = '0%'; if (liveAudioContext && liveAudioContext.state !== 'closed') { liveAudioContext.close(); } liveAudioContext = null; clearTimeout(recordingTimeout); if (mediaRecorder.state === 'recording') mediaRecorder.stop(); if (audioStream) audioStream.getTracks().forEach(track => track.stop()); }
+        
+        function resetToDefault() {
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            if (appState === 'recording') stopRecording();
+            appState = 'idle';
+            
+            letters.forEach(letter => {
+                letter.targetAlpha = 1; letter.alpha = 1;
+                letter.targetRotation = 0; letter.rotation = 0;
+                letter.targetScale = 1; letter.scale = 1;
+                letter.targetOffsetY = 0; letter.offsetY = 0;
+                letter.targetSpacingAfter = 80; letter.spacingAfter = 80;
+                letter.targetPoints = JSON.parse(JSON.stringify(pointData.thin));
+                letter.currentPoints = JSON.parse(JSON.stringify(pointData.thin));
+            });
+            debugDisplay.classList.add('hidden');
+            recordBtn.disabled = false;
+            recordBtn.textContent = 'Push to sleep';
+            showAnalysisBtn.disabled = true;
+            lastAnalysisData = null;
+            draw();
+        }
+
+        recordBtn.addEventListener('mousedown', startRecording); recordBtn.addEventListener('mouseup', stopRecording); recordBtn.addEventListener('mouseleave', stopRecording);
+        recordBtn.addEventListener('touchstart', e => { e.preventDefault(); startRecording(); });
+        recordBtn.addEventListener('touchend', e => { e.preventDefault(); stopRecording(); });
+        resetBtn.addEventListener('click', resetToDefault);
+        
+        showAnalysisBtn.addEventListener('click', () => { analysisModal.classList.remove('hidden'); setTimeout(() => analysisModal.classList.remove('opacity-0'), 10); drawAnalysis(); });
+        closeAnalysisBtn.addEventListener('click', () => { analysisModal.classList.add('opacity-0'); setTimeout(() => analysisModal.classList.add('hidden'), 300); });
+
+        resizeCanvas();
+    </script>
+
+</body>
+</html>
+
