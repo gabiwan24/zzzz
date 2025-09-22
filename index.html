@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Interaktives ZZZZ Logo 24.6 (Kompaktes Layout)</title>
+    <title>Interaktives ZZZZ Logo 25.1 (Finale Logik)</title>
     <!-- p5.js Bibliothek -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.1/p5.min.js"></script>
     <!-- Tailwind CSS für das Styling -->
@@ -134,11 +134,21 @@
                 });
                 
                 letters.forEach(l => l.spacingAfter = p.lerp(l.spacingAfter, l.targetSpacingAfter, 0.08));
-                const totalWidthOfAllLetters = shapeWidths.reduce((sum, w) => sum + w, 0) + letters.slice(0, -1).reduce((sum, l) => sum + l.spacingAfter, 0);
+                let totalWidthOfAllLetters = shapeWidths.reduce((sum, w) => sum + w, 0) + letters.slice(0, -1).reduce((sum, l) => sum + l.spacingAfter, 0);
                 
                 const drawingAreaWidth = p.width * 0.6;
                 const drawingAreaStartX = p.width * 0.2;
-                let startX = drawingAreaStartX + (drawingAreaWidth - totalWidthOfAllLetters) / 2;
+
+                let layoutScale = 1;
+                if (totalWidthOfAllLetters > drawingAreaWidth) {
+                    layoutScale = drawingAreaWidth / totalWidthOfAllLetters;
+                }
+
+                let finalWidths = shapeWidths.map(w => w * layoutScale);
+                let finalSpacings = letters.map(l => l.spacingAfter * layoutScale);
+                const finalTotalWidth = finalWidths.reduce((sum, w) => sum + w, 0) + finalSpacings.slice(0, -1).reduce((sum, s) => sum + s, 0);
+                
+                let startX = drawingAreaStartX + (drawingAreaWidth - finalTotalWidth) / 2;
                 
                 let isAnimating = false;
 
@@ -147,6 +157,7 @@
                     letter.offsetY = p.lerp(letter.offsetY, letter.targetOffsetY, 0.08);
                     letter.blur = p.lerp(letter.blur, letter.targetBlur, 0.08);
                     letter.pixelation = p.lerp(letter.pixelation, letter.targetPixelation, 0.08);
+                    letter.rotation = p.lerp(letter.rotation, letter.targetRotation, 0.08); // NEU
 
                     let pointsChanged = false;
                     if (letter.targetPoints && letter.currentPoints.length === letter.targetPoints.length) {
@@ -157,7 +168,7 @@
                             pt.y = p.lerp(pt.y, targetP.y, 0.08);
                         });
                     }
-                    if (pointsChanged || p.abs(letter.scale - letter.targetScale) > 0.01 || p.abs(letter.offsetY - letter.targetOffsetY) > 0.01 || p.abs(letter.blur - letter.targetBlur) > 0.01 || p.abs(letter.pixelation - letter.targetPixelation) > 0.01 || p.abs(letter.spacingAfter - letter.targetSpacingAfter) > 0.01) isAnimating = true;
+                    if (pointsChanged || p.abs(letter.scale - letter.targetScale) > 0.01 || p.abs(letter.offsetY - letter.targetOffsetY) > 0.01 || p.abs(letter.blur - letter.targetBlur) > 0.01 || p.abs(letter.pixelation - letter.targetPixelation) > 0.01 || p.abs(letter.spacingAfter - letter.targetSpacingAfter) > 0.01 || Math.abs(letter.rotation - letter.targetRotation) > 0.01) isAnimating = true;
                     
                     const g = letterGraphics[i];
                     g.clear();
@@ -179,12 +190,17 @@
                     if (letter.blur > 0.5) g.filter(p.BLUR, letter.blur);
                     if (letter.pixelation < 255) g.filter(p.POSTERIZE, p.max(2, p.floor(letter.pixelation)));
 
-                    const currentShapeWidth = shapeWidths[i];
-                    const currentShapeHeight = shapeDisplayHeight * letter.scale;
-                    p.imageMode(p.CENTER);
-                    p.image(g, startX + currentShapeWidth / 2, p.height / 2 + letter.offsetY, currentShapeWidth, currentShapeHeight);
+                    const currentShapeWidth = finalWidths[i];
+                    const currentShapeHeight = shapeDisplayHeight * letter.scale * layoutScale;
 
-                    startX += currentShapeWidth + letter.spacingAfter;
+                    p.push();
+                    p.translate(startX + currentShapeWidth / 2, p.height / 2 + letter.offsetY);
+                    p.rotate(letter.rotation);
+                    p.imageMode(p.CENTER);
+                    p.image(g, 0, 0, currentShapeWidth, currentShapeHeight);
+                    p.pop();
+
+                    startX += currentShapeWidth + finalSpacings[i];
                 });
                 
                 if (!isAnimating && appState === 'displaying') { appState = 'idle'; recordBtn.disabled = false; }
@@ -272,7 +288,7 @@
                     
                     letter.targetScale = 0.8 + Math.pow(analysis.peak, 0.8) * 5;
                     letter.targetOffsetY = 0;
-                    letter.targetRotation = 0;
+                    letter.targetRotation = (Math.random() - 0.5) * 0.15; // NEU: Subtile Rotation
                     if(i < NUM_LETTERS - 1) letter.targetSpacingAfter = 20 + analysis.peak * 300;
                     
                     letter.targetBlur = (i === minPeakIndex && minPeak < 0.08) ? 15 : 0; 
